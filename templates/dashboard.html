@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股每日分析看板 — {{ data.raw.date }}</title>
+{# 数据源徽章宏 #}
+{% macro source_badge(key) %}
+  {% set src = data.analysis.all_sources.get(key, {}) %}
+  {% if src.status == 'ok' %}
+    <span class="src-badge src-ok" title="{{ src.api }} {{ src.time }}">真实数据</span>
+  {% elif src.status == 'analysis' %}
+    <span class="src-badge src-analysis" title="AI基于规则和可用数据推算">AI分析推算</span>
+  {% elif src.status == 'mock' %}
+    <span class="src-badge src-mock" title="示例数据">示例数据</span>
+  {% else %}
+    <span class="src-badge src-fail" title="{{ src.reason or '暂无数据源' }}">暂无数据</span>
+  {% endif %}
+{% endmacro %}
+{% macro empty_state(msg) %}
+  <div class="empty-state">{{ msg or '暂无数据，待接入真实API后更新' }}</div>
+{% endmacro %}
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", sans-serif; background: #0a0e17; color: #c8cdd6; line-height: 1.5; min-height: 100vh; }
+  .up { color: #f87171; } .down { color: #4ade80; } .flat { color: #8b92a8; } .gold { color: #fbbf24; } .muted { color: #6b7385; }
+
+  .header { background: linear-gradient(135deg, #111624 0%, #0d111a 100%); border-bottom: 2px solid #1e2532; padding: 18px 32px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+  .header h1 { font-size: 1.35rem; font-weight: 700; color: #f0f2f5; }
+  .header .sub { font-size: 0.8rem; color: #6b7385; }
+  .badge { display: inline-block; padding: 4px 14px; border-radius: 20px; font-size: 0.72rem; font-weight: 600; }
+  .badge-gold { background: #2a2210; color: #fbbf24; border: 1px solid #3d3218; }
+  .badge-blue { background: #0f2240; color: #60a5fa; border: 1px solid #1a3558; }
+  .badge-red  { background: #2d1313; color: #f87171; border: 1px solid #4a2020; }
+  .badge-green { background: #132a18; color: #4ade80; border: 1px solid #1a3a22; }
+  .badge-gray  { background: #1a1a22; color: #6b7385; border: 1px solid #2a2a3a; }
+
+  .container { max-width: 1500px; margin: 0 auto; padding: 20px 28px; }
+  .section { margin-bottom: 24px; background: #111624; border: 1px solid #1a2032; border-radius: 10px; overflow: hidden; }
+  .section-hd { display: flex; align-items: center; gap: 10px; padding: 14px 20px; background: #141a28; border-bottom: 1px solid #1a2032; }
+  .section-hd .dot { width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; flex-shrink: 0; }
+  .section-hd .dot-red { background: #f87171; }
+  .section-hd .dot-blue { background: #60a5fa; }
+  .section-hd h2 { font-size: 0.95rem; font-weight: 700; color: #e8ecf2; }
+  .section-hd .extra { margin-left: auto; font-size: 0.75rem; color: #6b7385; }
+  .section-bd { padding: 16px 20px; }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; }
+  .grid-2,.grid-3,.grid-4,.grid-5,.grid-6 { display: grid; gap: 14px; }
+  .grid-2{grid-template-columns:repeat(2,1fr)} .grid-3{grid-template-columns:repeat(3,1fr)} .grid-4{grid-template-columns:repeat(4,1fr)} .grid-5{grid-template-columns:repeat(5,1fr)} .grid-6{grid-template-columns:repeat(6,1fr)}
+
+  /* Index Cards */
+  .idx-card { text-align: center; padding: 16px 12px; background: #0d111a; border: 1px solid #1a2032; border-radius: 8px; }
+  .idx-card .name { font-size: 0.75rem; color: #6b7385; margin-bottom: 4px; }
+  .idx-card .price { font-size: 1.4rem; font-weight: 700; }
+  .idx-card .chg { font-size: 0.85rem; font-weight: 600; margin-top: 2px; }
+  .idx-card .range { font-size: 0.7rem; color: #555; margin-top: 4px; }
+
+  /* GM Cards */
+  .gm-card { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #0d111a; border: 1px solid #1a2032; border-radius: 8px; }
+  .gm-card .gname { font-size: 0.7rem; color: #6b7385; }
+  .gm-card .gprice { font-size: 0.95rem; font-weight: 700; }
+  .gm-card .gchg { font-size: 0.8rem; font-weight: 600; }
+
+  /* Stat Cards */
+  .stat-card { text-align: center; padding: 14px 12px; background: #0d111a; border: 1px solid #1a2032; border-radius: 8px; }
+  .stat-card .slabel { font-size: 0.72rem; color: #6b7385; margin-bottom: 6px; }
+  .stat-card .svalue { font-size: 1.35rem; font-weight: 700; }
+  .stat-card .ssub { font-size: 0.7rem; color: #555; margin-top: 3px; }
+
+  /* Tables */
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  table.tbl th { text-align: left; padding: 8px 12px; color: #6b7385; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; border-bottom: 2px solid #1e2532; background: #0d111a; }
+  table.tbl td { padding: 8px 12px; border-bottom: 1px solid #141a28; }
+  table.tbl tr:hover td { background: #151c2a; }
+
+  /* ===== V3 NEW: Theme Cards (主线卡片) ===== */
+  .theme-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .theme-card { background: #0d111a; border: 1px solid #1a2032; border-radius: 10px; padding: 18px; }
+  .theme-card.confirmed { border-color: #f59e0b40; background: #11160f; }
+  .theme-card.potential { border-color: #60a5fa30; background: #0f141a; }
+  .theme-card.watching { border-color: #6b738530; }
+  .theme-card .tc-hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .theme-card .tc-name { font-size: 1rem; font-weight: 700; color: #f0f2f5; }
+  .theme-card .tc-score { font-size: 2rem; font-weight: 800; color: #fbbf24; }
+  .theme-card .tc-status { font-size: 0.75rem; font-weight: 700; padding: 3px 10px; border-radius: 12px; }
+  .tc-status.confirmed { background: #1a351a; color: #4ade80; }
+  .tc-status.potential { background: #2a2810; color: #fbbf24; }
+  .tc-status.watching { background: #1a1a22; color: #8b92a8; }
+  .theme-card .tc-state { font-size: 0.7rem; color: #6b7385; margin-bottom: 8px; }
+  .theme-card .tc-section-label { font-size: 0.68rem; color: #6b7385; text-transform: uppercase; margin: 10px 0 4px; }
+  .theme-card .tc-verify { font-size: 0.78rem; color: #b0b8c8; padding: 3px 0; }
+  .theme-card .tc-verify::before { content: "✓ "; color: #4ade80; font-weight: 700; }
+  .theme-card .tc-catalyst { font-size: 0.78rem; color: #60a5fa; }
+  .tc-sub-scores { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .tc-sub { font-size: 0.68rem; padding: 2px 8px; border-radius: 10px; background: #1a2032; color: #8b92a8; }
+  .tc-sub strong { color: #e8ecf2; }
+
+  /* ===== V3 NEW: Veto Grid ===== */
+  .veto-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .veto-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #0d111a; border: 1px solid #1a2032; border-radius: 8px; font-size: 0.82rem; }
+  .veto-item .check { font-size: 1.2rem; width: 24px; text-align: center; }
+  .veto-item.triggered { border-color: #f8717140; background: #1a1010; }
+  .veto-item.triggered .check { color: #f87171; }
+  .veto-item.clear .check { color: #4ade80; }
+  .veto-item .vdesc { font-size: 0.68rem; color: #6b7385; }
+
+  /* ===== V3 NEW: News Grade Badges ===== */
+  .grade-S { background: #fbbf24; color: #000; font-weight: 800; }
+  .grade-A { background: #f59e0b; color: #000; font-weight: 700; }
+  .grade-B { background: #60a5fa; color: #000; font-weight: 600; }
+  .grade-C { background: #4a4a5a; color: #8b92a8; }
+  .news-grade-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.65rem; font-weight: 700; margin-right: 4px; }
+  .news-bullish { background: #1a2e1a; border-left: 3px solid #4ade80; }
+  .news-bearish { background: #2e1a1a; border-left: 3px solid #f87171; }
+  .news-item { padding: 8px 14px; border-radius: 6px; margin-bottom: 6px; display: flex; align-items: flex-start; gap: 10px; font-size: 0.82rem; }
+
+  /* ===== V3 NEW: Stock Table ===== */
+  .stock-stars { color: #fbbf24; letter-spacing: 2px; }
+  .risk-low { color: #4ade80; } .risk-mid { color: #fbbf24; } .risk-high { color: #f87171; }
+
+  /* ===== V3 NEW: Key Events Timeline ===== */
+  .event-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #0d111a; border-left: 3px solid #f59e0b; margin-bottom: 8px; border-radius: 0 8px 8px 0; font-size: 0.84rem; }
+  .event-date { font-weight: 700; color: #fbbf24; width: 70px; flex-shrink: 0; }
+  .event-desc { flex: 1; }
+  .event-impact { font-size: 0.72rem; color: #6b7385; width: 160px; flex-shrink: 0; }
+  .event-dir { font-size: 0.72rem; padding: 2px 10px; border-radius: 12px; font-weight: 600; }
+  .dir-bullish { background: #1a351a; color: #4ade80; }
+  .dir-bearish { background: #351a1a; color: #f87171; }
+  .dir-neutral { background: #1a1a22; color: #8b92a8; }
+
+  /* ===== V3 NEW: Trade Plan ===== */
+  .plan-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .plan-card { padding: 16px; border-radius: 8px; }
+  .plan-buy { background: #111a11; border: 1px solid #1a351a; }
+  .plan-sell { background: #1a1111; border: 1px solid #351a1a; }
+  .plan-pos { background: #11141a; border: 1px solid #1a2535; }
+  .plan-card h3 { font-size: 0.85rem; font-weight: 700; margin-bottom: 10px; }
+  .plan-buy h3 { color: #4ade80; }
+  .plan-sell h3 { color: #f87171; }
+  .plan-pos h3 { color: #60a5fa; }
+  .plan-card .plan-item { font-size: 0.8rem; padding: 4px 0; color: #b0b8c8; }
+  .plan-card .plan-item::before { content: "▸ "; }
+
+  /* ===== Progress Bar ===== */
+  .prog-bar { width: 80px; height: 6px; background: #1e2532; border-radius: 3px; overflow: hidden; display: inline-block; margin-right: 6px; vertical-align: middle; }
+  .prog-fg { height: 100%; border-radius: 3px; }
+  .prog-green { background: #4ade80; }
+  .prog-yellow { background: #fbbf24; }
+  .prog-gray { background: #6b7385; }
+
+  /* Misc V2 retained */
+  .score-bar { display: inline-block; height: 6px; border-radius: 3px; background: linear-gradient(90deg, #f59e0b, #fbbf24); vertical-align: middle; margin-right: 6px; }
+  .lv-core { color: #fbbf24; font-weight: 700; } .lv-watch { color: #60a5fa; font-weight: 600; } .lv-obs { color: #8b92a8; } .lv-avoid { color: #4a4a5a; }
+  .intensity { display: flex; gap: 3px; align-items: center; }
+  .intensity .seg { width: 18px; height: 6px; border-radius: 2px; background: #1e2532; }
+  .intensity .seg.on { background: #f59e0b; } .intensity .seg.on.strong { background: #f87171; }
+  .link-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.7rem; font-weight: 600; }
+  .link-strong { background: #1a351a; color: #4ade80; } .link-mid { background: #2a2810; color: #fbbf24; } .link-weak { background: #1a1a22; color: #8b92a8; } .link-down { background: #351a1a; color: #f87171; }
+  .alert-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-left: 3px solid transparent; margin-bottom: 4px; font-size: 0.82rem; border-radius: 0 6px 6px 0; }
+  .alert-row:hover { background: #151c2a; } .alert-up { border-left-color: #f87171; } .alert-down { border-left-color: #4ade80; }
+  .alert-time { font-size: 0.75rem; color: #6b7385; width: 42px; flex-shrink: 0; }
+  .alert-sector { font-weight: 600; width: 80px; flex-shrink: 0; }
+  .alert-chg { font-weight: 700; width: 55px; text-align: right; flex-shrink: 0; }
+  .alert-reason { color: #8b92a8; flex: 1; font-size: 0.78rem; }
+  .alert-status { font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; flex-shrink: 0; }
+  .status-ongoing { background: #1a351a; color: #4ade80; } .status-watch { background: #2a2810; color: #fbbf24; }
+  .echelon-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #0d111a; border-radius: 6px; margin-bottom: 6px; border-left: 3px solid #f59e0b; }
+  .ech-height { font-size: 0.85rem; font-weight: 700; color: #fbbf24; width: 36px; flex-shrink: 0; }
+  .ech-stock { font-weight: 600; width: 80px; flex-shrink: 0; }
+  .ech-sector { font-size: 0.78rem; color: #6b7385; width: 70px; flex-shrink: 0; }
+  .strength-lead { color: #fbbf24; } .strength-strong { color: #60a5fa; } .strength-mid { color: #8b92a8; } .strength-weak { color: #555; }
+  .tag-cloud { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sector-tag { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 500; border: 1px solid #2a3550; background: #111d30; color: #60a5fa; }
+  .sector-tag.hot { background: #1a2210; color: #fbbf24; border-color: #3d3218; }
+
+  .advice-panel { display: grid; grid-template-columns: 220px 1fr; gap: 14px; }
+  .advice-score-box { background: linear-gradient(135deg, #141a28, #1a1f30); border: 1px solid #f59e0b30; border-radius: 10px; text-align: center; padding: 20px 16px; }
+  .advice-big { font-size: 3.5rem; font-weight: 800; color: #f59e0b; line-height: 1; }
+  .advice-pos { font-size: 1rem; font-weight: 700; color: #fff; margin-top: 8px; }
+  .advice-risk { display: inline-block; margin-top: 6px; padding: 3px 14px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; }
+  .risk-low { background: #1a351a; color: #4ade80; } .risk-mid { background: #2a2810; color: #fbbf24; } .risk-high { background: #351a1a; color: #f87171; }
+  .advice-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .advice-card { background: #0d111a; border: 1px solid #1a2032; border-radius: 8px; padding: 14px; }
+  .advice-card .ac-hd { font-size: 0.7rem; color: #6b7385; text-transform: uppercase; margin-bottom: 8px; }
+  .kp-item { padding: 5px 0; font-size: 0.8rem; border-bottom: 1px solid #141a28; color: #b0b8c8; }
+  .kp-item:last-child { border-bottom: none; } .kp-item::before { content: "▸ "; color: #f59e0b; }
+  .risk-item { padding: 4px 0; font-size: 0.78rem; color: #f87171; } .risk-item::before { content: "⚠ "; }
+  .break-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 0.75rem; }
+  .break-label { width: 55px; color: #6b7385; text-align: right; flex-shrink: 0; }
+  .break-bar-bg { flex: 1; height: 6px; background: #1e2532; border-radius: 3px; overflow: hidden; }
+  .break-bar-fg { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #2563eb, #60a5fa); }
+  .break-val { width: 32px; text-align: right; font-weight: 600; flex-shrink: 0; }
+
+  /* Source badges */
+  .src-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.65rem; font-weight: 700; margin-left: 8px; }
+  .src-ok { background: #1a351a; color: #4ade80; border: 1px solid #2a4a2a; }
+  .src-analysis { background: #1a2845; color: #60a5fa; border: 1px solid #2a3a5a; }
+  .src-mock { background: #2a2810; color: #fbbf24; border: 1px solid #3d3218; }
+  .src-fail { background: #351a1a; color: #f87171; border: 1px solid #4a2020; }
+  .empty-state { text-align: center; padding: 30px; color: #6b7385; font-size: 0.85rem; border: 1px dashed #2a2d3a; border-radius: 8px; margin: 10px 0; }
+
+  .footer { text-align: center; padding: 18px; color: #3a4050; font-size: 0.7rem; border-top: 1px solid #141a28; margin-top: 20px; }
+
+  @media (max-width: 1100px) {
+    .grid-5,.grid-6{grid-template-columns:repeat(3,1fr)} .grid-4,.theme-cards{grid-template-columns:repeat(2,1fr)}
+    .advice-panel{grid-template-columns:1fr} .advice-detail-grid,.plan-grid{grid-template-columns:1fr} .veto-grid{grid-template-columns:repeat(2,1fr)}
+  }
+  @media (max-width: 640px) {
+    .grid-2,.grid-3,.grid-5,.grid-6,.theme-cards,.veto-grid{grid-template-columns:1fr}
+    .header{flex-direction:column;align-items:flex-start} .container{padding:10px} .section-bd{padding:10px}
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>A股每日分析看板</h1>
+    <span class="sub">{{ data.raw.date }} | 数据源: {{ data.raw.source }} | V3 17模块</span>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <span class="badge badge-blue">{{ data.raw.date }}</span>
+    <span class="badge {% if data.analysis.trade_advice.overall_score >= 55 %}badge-gold{% else %}badge-red{% endif %}">综合 {{ data.analysis.trade_advice.overall_score }}分</span>
+    <span class="badge {% if data.analysis.market_summary.temperature == '强势' %}badge-gold{% elif data.analysis.market_summary.temperature == '弱势' %}badge-red{% else %}badge-blue{% endif %}">{{ data.analysis.market_summary.temperature }}</span>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ===== 1. 大盘指数 ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>1. 大盘指数</h2>{{ source_badge('market_overview') }}<span class="extra">腾讯API</span></div>
+  <div class="section-bd"><div class="grid-5">
+    {% for name, info in data.raw.market_overview.items() if name != '_source' %}
+    <div class="idx-card">
+      <div class="name">{{ name }} {{ info.code }}</div>
+      <div class="price {% if info.change_pct > 0 %}up{% elif info.change_pct < 0 %}down{% else %}flat{% endif %}">{{ "%.2f"|format(info.price) }}</div>
+      <div class="chg {% if info.change_pct > 0 %}up{% elif info.change_pct < 0 %}down{% else %}flat{% endif %}">{{ "%+.2f%%"|format(info.change_pct) }}</div>
+      <div class="range">{{ "%+.2f"|format(info.change_amt) }} | 开{{ "%.2f"|format(info.open) }} | 高{{ "%.2f"|format(info.high) }} | 低{{ "%.2f"|format(info.low) }}</div>
+    </div>{% endfor %}
+  </div></div>
+</div>
+
+<!-- ===== 2. 外围市场 ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>2. 外围市场情绪</h2>{{ source_badge('global_markets') }}<span class="extra">腾讯API | 对A股: <span class="{% if data.analysis.global_markets.a_share_impact == '偏多' %}up{% elif data.analysis.global_markets.a_share_impact == '偏空' %}down{% else %}muted{% endif %}">{{ data.analysis.global_markets.a_share_impact }}</span> ({{ data.analysis.global_markets.impact_score }}分)</span></div>
+  <div class="section-bd"><div class="grid-6">
+    {% for idx in data.analysis.global_markets.indices %}
+    <div class="gm-card">
+      <div style="font-size:1.2rem;">{% if 'VIX' in idx.name %}⚡{% elif 'A50' in idx.name %}🇨🇳{% elif '恒生' in idx.name %}🇭🇰{% else %}🇺🇸{% endif %}</div>
+      <div>
+        <div class="gname">{{ idx.name }}</div>
+        <div class="gprice">{{ "%.2f"|format(idx.price) }}</div>
+        <div class="gchg {% if idx.change_pct > 0 %}up{% elif idx.change_pct < 0 %}down{% else %}flat{% endif %}">{{ "%+.2f%%"|format(idx.change_pct) }} <span style="font-size:0.65rem;color:#555;">{{ idx.status }}</span></div>
+      </div>
+    </div>{% endfor %}
+  </div>
+  <div style="margin-top:10px;font-size:0.8rem;color:#8b92a8;">{{ data.analysis.global_markets.vix_note }} | {{ data.analysis.global_markets.summary }}</div>
+  </div>
+</div>
+
+<!-- ===== 3. 市场概况 (用户模块1) ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>3. 市场概况</h2>{{ source_badge('market_stats') }}<span class="extra">振幅 {{ data.raw.market_stats.get('振幅%','-') }}% | 成交额 {{ data.raw.market_stats.get('成交额(亿)',0)|int }}亿</span></div>
+  <div class="section-bd">
+    <div class="grid-2">
+      <div>
+        <div style="font-size:0.75rem;color:#6b7385;margin-bottom:8px;">指数详情</div>
+        <table class="tbl">
+          <thead><tr><th>指数</th><th>点位</th><th>涨跌幅</th><th>涨跌额</th><th>方向</th></tr></thead>
+          <tbody>
+            {% for r in data.analysis.market_overview_detail.table_rows %}
+            <tr><td style="font-weight:600;">{{ r.指数 }}</td><td>{{ r.点位 }}</td><td class="{% if '+' in r.涨跌幅 %}up{% else %}down{% endif %}">{{ r.涨跌幅 }}</td><td>{{ r.涨跌 }}</td><td>{{ r.状态 }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div style="font-size:0.75rem;color:#6b7385;margin-bottom:8px;">市场状态判断</div>
+        <div style="font-size:1.5rem;font-weight:700;margin-bottom:8px;">{{ data.analysis.market_overview_detail.state_emoji }} {{ data.analysis.market_overview_detail.market_state }}</div>
+        <div style="font-size:0.75rem;color:#6b7385;margin-bottom:6px;">关键现象</div>
+        {% for p in data.analysis.market_overview_detail.phenomena %}
+        <div style="font-size:0.82rem;color:#e8ecf2;padding:5px 0;border-bottom:1px solid #141a28;">{{ loop.index }}. {{ p }}</div>
+        {% endfor %}
+        <div class="grid-3" style="margin-top:10px;">
+          <div class="stat-card"><div class="slabel">成交额(万亿)</div><div class="svalue">{{ "%.2f"|format(data.raw.market_stats.get('成交额(亿)',0)/10000) }}</div></div>
+          <div class="stat-card"><div class="slabel">振幅</div><div class="svalue">{{ data.analysis.market_overview_detail.turnover }}%</div></div>
+          <div class="stat-card"><div class="slabel">涨/跌家数</div><div class="svalue"><span class="up">{{ data.raw.market_stats.get('上涨家数',0) }}</span>/<span class="down">{{ data.raw.market_stats.get('下跌家数',0) }}</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 4. 主线判断 (用户模块2) ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>4. 主线判断</h2><span class="extra">景气度30% + 资金25% + 政策20% + 技术15% + 共识10%</span></div>
+  <div class="section-bd">
+    <div class="theme-cards">
+      {% for t in data.analysis.main_themes_detail.themes %}
+      <div class="theme-card {{ t.status_class }}">
+        <div class="tc-hd">
+          <span class="tc-name">{{ t.name }}</span>
+          <span class="tc-score">{{ t.score }}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span class="tc-status {{ t.status_class }}">{{ t.status }}</span>
+          <span class="tc-state">{{ t.current_state }}</span>
+        </div>
+        <div class="tc-sub-scores">
+          {% for k, v in t.sub_scores.items() %}
+          <span class="tc-sub">{{ k }} <strong>{{ v }}</strong></span>
+          {% endfor %}
+        </div>
+        <div class="tc-section-label">验证逻辑</div>
+        {% for v in t.verification %}
+        <div class="tc-verify">{{ v }}</div>
+        {% endfor %}
+        <div class="tc-section-label">催化预期</div>
+        <div class="tc-catalyst">{{ t.catalyst }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- ===== 5. 潜在主线跟踪 (用户模块3) ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot dot-blue"></span><h2>5. 潜在主线跟踪</h2><span class="extra">{{ data.analysis.potential_themes.summary }}</span></div>
+  <div class="section-bd" style="overflow-x:auto;">
+    <table class="tbl">
+      <thead><tr><th>方向</th><th>逻辑</th><th>进度</th><th>状态</th><th>催化预期</th></tr></thead>
+      <tbody>
+        {% for t in data.analysis.potential_themes.themes %}
+        <tr>
+          <td style="font-weight:600;">{{ t.name }}</td>
+          <td style="font-size:0.78rem;">{{ t.logic }}</td>
+          <td>
+            <span class="prog-bar"><span class="prog-fg {% if t.progress_color == 'green' %}prog-green{% elif t.progress_color == 'yellow' %}prog-yellow{% else %}prog-gray{% endif %}" style="width:{{ t.progress }}%;"></span></span>
+            {{ t.progress }}%
+          </td>
+          <td><span class="badge {% if t.progress_color == 'yellow' %}badge-gold{% else %}badge-gray{% endif %}">{{ t.progress_label }}</span></td>
+          <td style="font-size:0.78rem;color:#60a5fa;">{{ t.catalyst }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== 6. 一票否决号 (用户模块4) ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot dot-red"></span><h2>6. 一票否决号</h2><span class="extra">触发任一 → 暂停操作 | {% if data.analysis.veto_signals.all_clear %}全部未触发{% else %}{{ data.analysis.veto_signals.triggered_count }}项已触发{% endif %}</span></div>
+  <div class="section-bd">
+    <div class="veto-grid">
+      {% for s in data.analysis.veto_signals.signals %}
+      <div class="veto-item {% if s.triggered %}triggered{% else %}clear{% endif %}">
+        <span class="check">{% if s.triggered %}☑{% else %}○{% endif %}</span>
+        <div>
+          <div style="font-weight:600;">{{ s.name }}</div>
+          <div class="vdesc">{{ s.description }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <div style="margin-top:10px;font-size:0.82rem;color:#fbbf24;background:#1a1c10;padding:10px 14px;border-radius:6px;border-left:3px solid #f59e0b;">{{ data.analysis.veto_signals.summary }}</div>
+  </div>
+</div>
+
+<!-- ===== 7. 昨日板块 ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>7. 昨日板块 → 今日延续</h2><span class="extra">延续性 {{ data.analysis.yesterday_sectors.continuity_score }}分 | {{ data.raw.yesterday_sectors.date }}</span></div>
+  <div class="section-bd"><div class="grid-2">
+    <div>
+      <div style="font-size:0.75rem;color:#6b7385;margin-bottom:8px;">昨日涨幅 TOP5</div>
+      <table class="tbl"><thead><tr><th>板块</th><th>昨涨跌</th><th>涨停</th><th>领涨股</th><th>延续</th><th>今涨跌</th></tr></thead>
+        <tbody>{% for s in data.analysis.yesterday_sectors.top_gainers %}<tr><td style="font-weight:600;">{{ s.板块 }}</td><td class="up">{{ "%+.2f%%"|format(s['涨跌幅%']) }}</td><td>{{ s.涨停数 }}</td><td>{{ s.领涨股 }}</td><td>{% if s.今日延续 %}<span class="link-badge link-strong">延续</span>{% else %}<span class="link-badge link-weak">转弱</span>{% endif %}</td><td class="{% if s['今日涨跌%'] > 0 %}up{% else %}down{% endif %}">{{ "%+.2f%%"|format(s['今日涨跌%']) }}</td></tr>{% endfor %}</tbody></table>
+    </div>
+    <div>
+      <div style="font-size:0.75rem;color:#6b7385;margin-bottom:8px;">昨日跌幅 TOP5</div>
+      <table class="tbl"><thead><tr><th>板块</th><th>昨涨跌</th><th>跌停</th><th>领跌股</th><th>延续</th><th>今涨跌</th></tr></thead>
+        <tbody>{% for s in data.analysis.yesterday_sectors.top_losers %}<tr><td style="font-weight:600;">{{ s.板块 }}</td><td class="down">{{ "%+.2f%%"|format(s['涨跌幅%']) }}</td><td>{{ s.跌停数 }}</td><td>{{ s.领跌股 }}</td><td>{% if s.今日延续 %}<span class="link-badge link-down">延续</span>{% else %}<span class="link-badge link-mid">企稳</span>{% endif %}</td><td class="{% if s['今日涨跌%'] > 0 %}up{% else %}down{% endif %}">{{ "%+.2f%%"|format(s['今日涨跌%']) }}</td></tr>{% endfor %}</tbody></table>
+    </div>
+  </div></div>
+</div>
+
+<!-- ===== 8. 集合竞价 ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>8. 今日集合竞价</h2><span class="extra">{{ data.raw.call_auction.auction_time }} | 信号: <span class="{% if data.analysis.call_auction.direction_signal == '偏多' %}up{% else %}down{% endif %}">{{ data.analysis.call_auction.direction_signal }}</span> | 量比 {{ data.raw.call_auction.auction_volume_ratio }}</span></div>
+  <div class="section-bd"><div class="grid-2">
+    <div>
+      <div style="font-size:0.75rem;color:#6b7385;margin-bottom:8px;">高开板块</div>
+      <table class="tbl"><thead><tr><th>板块</th><th>高开%</th><th>竞价强度</th><th>代表股</th><th>封单额</th></tr></thead>
+        <tbody>{% for a in data.analysis.call_auction.high_open_sectors %}<tr><td style="font-weight:600;">{{ a.板块 }}</td><td class="up">{{ "%+.2f%%"|format(a['高开%']) }}</td><td><span class="intensity" style="display:inline-flex;">{% for i in range(5) %}<span class="seg {% if i < a.强度分 // 20 %}on{% if a.竞价强度 == '强' %} strong{% endif %}{% endif %}"></span>{% endfor %}</span> {{ a.竞价强度 }}</td><td>{{ a.代表股 }}</td><td>{{ "%.1f"|format(a['封单额(亿)']) }}亿</td></tr>{% endfor %}</tbody></table>
+    </div>
+    <div>
+      <div style="font-size:0.75rem;color:#6b7385;margin-bottom:8px;">低开板块</div>
+      <table class="tbl"><thead><tr><th>板块</th><th>低开%</th><th>代表股</th></tr></thead>
+        <tbody>{% for a in data.analysis.call_auction.low_open_sectors %}<tr><td style="font-weight:600;">{{ a.板块 }}</td><td class="down">{{ "%+.2f%%"|format(a['低开%']) }}</td><td>{{ a.代表股 }}</td></tr>{% endfor %}</tbody></table>
+      <div style="margin-top:10px;font-size:0.78rem;color:#8b92a8;">{{ data.analysis.call_auction.summary }}</div>
+    </div>
+  </div></div>
+</div>
+
+<!-- ===== 9. 重大消息面 S/A/B/C (用户模块5) ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>9. 重大消息面</h2>{{ source_badge('news_strong') }}<span class="extra">情绪: <span class="{% if data.analysis.news_impact.mood == '偏多' %}up{% elif data.analysis.news_impact.mood == '偏空' %}down{% else %}muted{% endif %}">{{ data.analysis.news_impact.mood }}</span> ({{ data.analysis.news_impact.sentiment_score }}分)</span></div>
+  <div class="section-bd"><div class="grid-2">
+    <div>
+      <div style="font-size:0.75rem;color:#4ade80;font-weight:700;margin-bottom:8px;">利好</div>
+      {% for n in data.analysis.news_impact.bullish_items %}
+      <div class="news-item news-bullish">
+        <span class="news-grade-badge grade-{{ n.grade }}">{{ n.grade }}</span>
+        <span>{{ n.title }} <span style="font-size:0.65rem;color:#555;">[{{ n.tag }}]</span></span>
+      </div>{% endfor %}
+    </div>
+    <div>
+      <div style="font-size:0.75rem;color:#f87171;font-weight:700;margin-bottom:8px;">利空</div>
+      {% for n in data.analysis.news_impact.bearish_items %}
+      <div class="news-item news-bearish">
+        <span class="news-grade-badge grade-{{ n.grade }}">{{ n.grade }}</span>
+        <span>{{ n.title }} <span style="font-size:0.65rem;color:#555;">[{{ n.tag }}]</span></span>
+      </div>{% endfor %}
+      {% if not data.analysis.news_impact.bearish_items %}<div style="font-size:0.78rem;color:#6b7385;padding:10px;">今日无明显利空消息</div>{% endif %}
+    </div>
+  </div>
+  <div style="margin-top:6px;font-size:0.75rem;color:#8b92a8;">{{ data.analysis.news_impact.summary }}</div></div>
+</div>
+
+<!-- ===== 10. 板块资金流 ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>10. 板块资金流 & 主线</h2><span class="extra">流入 {{ data.analysis.main_theme.inflow_count }} / 流出 {{ data.analysis.main_theme.outflow_count }} | 平均热度 {{ data.analysis.main_theme.avg_score }}分</span></div>
+  <div class="section-bd" style="overflow-x:auto;">
+    <table class="tbl"><thead><tr><th>板块</th><th>涨跌幅</th><th>主力净流入</th><th>涨停数</th><th>领涨股</th><th>评分</th><th>判定</th></tr></thead>
+      <tbody>{% for t in data.analysis.main_theme.themes %}<tr><td style="font-weight:600;">{{ t.name }}</td><td class="{% if t.change_pct > 0 %}up{% else %}down{% endif %}">{{ "%+.2f%%"|format(t.change_pct) }}</td><td class="{% if t.net_flow > 0 %}up{% else %}down{% endif %}">{{ "%+.2f"|format(t.net_flow) }}亿</td><td>{{ t.limit_count }}</td><td>{{ t.leader }}</td><td><span class="score-bar" style="width:{{ t.composite_score * 0.7 }}px;"></span><strong>{{ t.composite_score }}</strong></td><td>{% if t.level_num == 3 %}<span class="lv-core">{{ t.level }}</span>{% elif t.level_num == 2 %}<span class="lv-watch">{{ t.level }}</span>{% else %}<span class="lv-avoid">{{ t.level }}</span>{% endif %}</td></tr>{% endfor %}</tbody></table>
+    <div style="margin-top:8px;font-size:0.78rem;color:#8b92a8;">{{ data.analysis.main_theme.summary }}</div>
+  </div>
+</div>
+
+<!-- ===== 11. 龙虎榜联动 ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>11. 龙虎榜 → 板块联动</h2><span class="extra">{{ data.raw.dragon_tiger.date }} | 联动 {{ data.analysis.dragon_tiger.linkage_score }}分 | 强联动 {{ data.analysis.dragon_tiger.strong_link_count }}个</span></div>
+  <div class="section-bd" style="overflow-x:auto;">
+    <table class="tbl"><thead><tr><th>股票</th><th>板块</th><th>净买入(亿)</th><th>买入席位</th><th>卖出席位</th><th>今日联动</th><th>强度</th></tr></thead>
+      <tbody>{% for r in data.analysis.dragon_tiger.records %}<tr><td style="font-weight:600;">{{ r.股票 }}</td><td>{{ r.板块 }}</td><td class="{% if r['净买入(亿)'] > 0 %}up{% else %}down{% endif %}">{{ "%+.2f"|format(r['净买入(亿)']) }}亿</td><td style="font-size:0.75rem;color:#8b92a8;">{{ r.买入席位[:2]|join(', ') }}</td><td style="font-size:0.75rem;color:#8b92a8;">{{ r.卖出席位[:2]|join(', ') }}</td><td>{% if '涨停' in r.今日联动 %}<span class="link-badge link-strong">{{ r.今日联动 }}</span>{% elif '上涨' in r.今日联动 %}<span class="link-badge link-mid">{{ r.今日联动 }}</span>{% else %}<span class="link-badge link-down">{{ r.今日联动 }}</span>{% endif %}</td><td>{% if r.联动强度 == '强' %}<span style="color:#4ade80;font-weight:700;">强</span>{% elif r.联动强度 == '中' %}<span style="color:#fbbf24;">中</span>{% else %}<span style="color:#8b92a8;">弱</span>{% endif %}</td></tr>{% endfor %}</tbody></table>
+    <div style="margin-top:8px;font-size:0.78rem;color:#8b92a8;">{{ data.analysis.dragon_tiger.summary }}</div>
+    <div class="tag-cloud" style="margin-top:8px;"><span style="font-size:0.7rem;color:#6b7385;">联动板块:</span>{% for s in data.analysis.dragon_tiger.linked_sectors %}<span class="sector-tag hot">{{ s }}</span>{% endfor %}</div>
+  </div>
+</div>
+
+<!-- ===== 12. 板块异动监控 ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>12. 板块异动监控</h2><span class="extra">{{ data.analysis.sector_alerts.total_alerts }}次异动 | {{ data.analysis.sector_alerts.positive_count }}正 | {{ data.analysis.sector_alerts.trend }}</span></div>
+  <div class="section-bd">
+    {% for a in data.analysis.sector_alerts.alerts %}
+    <div class="alert-row {% if a['涨幅%'] > 0 %}alert-up{% else %}alert-down{% endif %}">
+      <span class="alert-time">{{ a.时间 }}</span><span class="alert-sector">{{ a.板块 }}</span>
+      <span class="alert-chg {% if a['涨幅%'] > 0 %}up{% else %}down{% endif %}">{{ "%+.2f%%"|format(a['涨幅%']) }}</span>
+      <span class="alert-reason">{{ a.触发原因 }}</span>
+      <span style="font-size:0.7rem;color:#6b7385;">量比{{ a.量比 }}</span>
+      <span class="alert-status {% if a.持续 == '是' %}status-ongoing{% else %}status-watch{% endif %}">{{ a.持续 }}</span>
+    </div>{% endfor %}
+    <div style="margin-top:8px;font-size:0.78rem;color:#8b92a8;">{{ data.analysis.sector_alerts.summary }}</div>
+  </div>
+</div>
+
+<!-- ===== 13. 涨停板持续性 ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>13. 涨停板持续性</h2><span class="extra">最高{{ data.analysis.limit_up_streak.max_board }}板 | 涨停{{ data.analysis.limit_up_streak.stats.涨停总数 }}家 | 首板{{ data.analysis.limit_up_streak.stats.首板数 }}/连板{{ data.analysis.limit_up_streak.stats.连板数 }} | {{ data.analysis.limit_up_streak.streak_score }}分</span></div>
+  <div class="section-bd"><div class="grid-2">
+    <div>
+      <div style="font-size:0.73rem;color:#fbbf24;font-weight:700;margin-bottom:8px;">连板梯队</div>
+      {% for e in data.analysis.limit_up_streak.echelon %}
+      <div class="echelon-row"><span class="ech-height">{{ e.连板高度 }}</span><span class="ech-stock">{{ e.股票 }}</span><span class="ech-sector">{{ e.板块 }}</span><span style="font-size:0.8rem;width:70px;">{{ "%.1f"|format(e['封单额(亿)']) }}亿</span><span style="font-size:0.75rem;color:#6b7385;">换手{{ e['换手率%'] }}%</span><span class="{% if e.梯队强度 == '龙头' %}strength-lead{% elif e.梯队强度 == '强' %}strength-strong{% elif e.梯队强度 == '中' %}strength-mid{% else %}strength-weak{% endif %}">{{ e.梯队强度 }}</span></div>{% endfor %}
+    </div>
+    <div>
+      <div style="font-size:0.73rem;color:#60a5fa;font-weight:700;margin-bottom:8px;">涨停板块分布</div>
+      <table class="tbl"><thead><tr><th>板块</th><th>今日涨停</th><th>昨日涨停</th><th>连板数</th><th>趋势</th></tr></thead>
+        <tbody>{% for d in data.analysis.limit_up_streak.distribution %}<tr><td style="font-weight:600;">{{ d.板块 }}</td><td style="font-weight:700;">{{ d.今日涨停数 }}</td><td>{{ d.昨日涨停数 }}</td><td>{{ d.连板数 }}</td><td>{% if d.趋势 == '增强' %}<span class="link-badge link-strong">增强</span>{% else %}<span class="link-badge link-mid">持平</span>{% endif %}</td></tr>{% endfor %}</tbody></table>
+    </div>
+  </div>
+  <div style="margin-top:8px;font-size:0.78rem;color:#8b92a8;">{{ data.analysis.limit_up_streak.summary }}</div></div>
+</div>
+
+<!-- ===== 14. 今日操作计划 (用户模块6) ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>14. 今日操作计划</h2><span class="extra">{{ data.analysis.trade_plan.position_advice[:20] }}...</span></div>
+  <div class="section-bd">
+    <div class="plan-grid">
+      <div class="plan-card plan-buy">
+        <h3>买入条件</h3>
+        {% for c in data.analysis.trade_plan.buy_conditions %}
+        <div class="plan-item">{{ c }}</div>{% endfor %}
+      </div>
+      <div class="plan-card plan-sell">
+        <h3>卖出条件</h3>
+        {% for c in data.analysis.trade_plan.sell_conditions %}
+        <div class="plan-item">{{ c }}</div>{% endfor %}
+      </div>
+      <div class="plan-card plan-pos">
+        <h3>仓位建议</h3>
+        <div class="plan-item">{{ data.analysis.trade_plan.position_advice }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 15. 主线推荐标的 (用户模块7) ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot"></span><h2>15. 主线推荐标的</h2><span class="extra">{{ data.analysis.recommended_stocks.summary }}</span></div>
+  <div class="section-bd">
+    {% for g in data.analysis.recommended_stocks.groups %}
+    <div style="margin-bottom:16px;">
+      <div style="font-size:0.8rem;color:#fbbf24;font-weight:700;margin-bottom:8px;">{{ g.label }} ({{ g.stocks|length }}只)</div>
+      <div style="overflow-x:auto;">
+        <table class="tbl"><thead><tr><th>标的</th><th>代码</th><th>评分</th><th>信号</th><th>买入区间</th><th>目标价</th><th>止损价</th><th>持有</th><th>风险</th></tr></thead>
+          <tbody>{% for s in g.stocks %}<tr><td style="font-weight:600;">{{ s.name }}</td><td style="color:#6b7385;font-size:0.78rem;">{{ s.code }}</td><td><span class="gold" style="font-weight:700;">{{ s.score }}</span></td><td style="font-size:0.75rem;max-width:200px;">{{ s.signal }}</td><td>{{ s.buy_range }}</td><td class="up">{{ s.target }}</td><td class="down">{{ s.stop_loss }}</td><td>{{ s.hold }}</td><td class="{% if s.risk == '低' %}risk-low{% elif s.risk == '高' %}risk-high{% else %}risk-mid{% endif %}">{{ s.risk }}</td></tr>{% endfor %}</tbody></table>
+      </div>
+    </div>{% endfor %}
+  </div>
+</div>
+
+<!-- ===== 16. 关键节点 (用户模块8) ===== -->
+<div class="section">
+  <div class="section-hd"><span class="dot dot-blue"></span><h2>16. 关键节点</h2><span class="extra">未来1个月重大事件预判</span></div>
+  <div class="section-bd">
+    {% for e in data.analysis.key_events.events %}
+    <div class="event-row">
+      <span class="event-date">{{ e.date }}</span>
+      <span class="event-desc" style="flex:1;">{{ e.event }}</span>
+      <span class="event-impact">{{ e.impact }}</span>
+      <span class="event-dir dir-{{ e.dir_class }}">{{ e.direction }}</span>
+    </div>{% endfor %}
+    <div style="margin-top:8px;font-size:0.8rem;color:#fbbf24;background:#1a1c10;padding:8px 14px;border-radius:6px;">{{ data.analysis.key_events.summary }}</div>
+  </div>
+</div>
+
+<!-- ===== 17. 综合评分 ===== -->
+<div class="section" style="border-color:#f59e0b30;">
+  <div class="section-hd" style="background:#181d14;"><span class="dot" style="background:#f59e0b;"></span><h2>17. 综合评分 & 操作建议</h2><span class="extra">8维加权</span></div>
+  <div class="section-bd">
+    <div class="advice-panel">
+      <div class="advice-score-box">
+        <div style="font-size:0.65rem;color:#6b7385;text-transform:uppercase;">综合评分</div>
+        <div class="advice-big">{{ data.analysis.trade_advice.overall_score }}</div>
+        <div class="advice-pos">{{ data.analysis.trade_advice.position_advice }}</div>
+        <span class="advice-risk {% if data.analysis.trade_advice.risk_level in ['低','中低'] %}risk-low{% elif data.analysis.trade_advice.risk_level == '中' %}risk-mid{% else %}risk-high{% endif %}">{{ data.analysis.trade_advice.risk_level }}风险</span>
+      </div>
+      <div>
+        <div class="advice-detail-grid">
+          <div class="advice-card"><div class="ac-hd">评分明细</div>
+            {% set bd = data.analysis.trade_advice.score_breakdown %}
+            {% for key, label in [('market','市场温度'),('global','外围情绪'),('news','消息面'),('theme','主线强度'),('auction','竞价方向'),('dragon','龙虎联动'),('alerts','板块异动'),('limits','涨停梯队')] %}
+            <div class="break-row"><span class="break-label">{{ label }}</span><div class="break-bar-bg"><div class="break-bar-fg" style="width:{{ bd[key] }}%;{% if key == 'theme' %}background:linear-gradient(90deg,#f59e0b,#fbbf24);{% endif %}"></div></div><span class="break-val">{{ bd[key] }}</span></div>{% endfor %}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div class="advice-card"><div class="ac-hd">操作策略</div><p style="font-size:0.85rem;">{{ data.analysis.trade_advice.action_advice }}</p></div>
+            <div class="advice-card"><div class="ac-hd">关注方向</div><div class="tag-cloud">{% for s in data.analysis.trade_advice.watch_sectors %}<span class="sector-tag hot">{{ s }}</span>{% endfor %}</div></div>
+          </div>
+        </div>
+        <div class="advice-detail-grid" style="margin-top:14px;">
+          <div class="advice-card"><div class="ac-hd">关键要点</div>{% for p in data.analysis.trade_advice.key_points %}<div class="kp-item">{{ p }}</div>{% endfor %}</div>
+          <div class="advice-card"><div class="ac-hd">风险提示</div>{% for r in data.analysis.trade_advice.risks %}<div class="risk-item">{{ r }}</div>{% endfor %}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /container -->
+<div class="footer">A股每日分析看板 · 自动生成于 {{ data.raw.date }} · 数据源: {{ data.raw.source }} · 17模块V3 · 内容仅供参考，不构成投资建议</div>
+</body>
+</html>

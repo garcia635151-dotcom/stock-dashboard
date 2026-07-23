@@ -1,0 +1,43 @@
+name: A股每日看板
+
+on:
+  schedule:
+    # 北京时间 09:00 = UTC 01:00
+    - cron: '0 1 * * 1-5'
+  # 允许手动触发
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: |
+          pip install akshare jinja2 openai pandas
+
+      - name: 生成看板
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          python main.py --real
+          # 重命名方便访问
+          cp output/latest.html output/index.html
+
+      - name: 发布到 GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./output
+          publish_branch: pages
+          force_orphan: true
+          commit_message: "每日自动更新 [skip ci]"
